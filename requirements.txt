@@ -3,4 +3,4 @@ Pillow
 numpy
 matplotlib
 opencv-python-headless
-rembg
+rembg[cpu]
