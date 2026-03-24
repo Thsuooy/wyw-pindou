@@ -179,28 +179,31 @@ grid_size = st.sidebar.slider("图纸精细度 (最长边豆子数)", min_value=
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("AI 抠图与画质优化")
+# 【新增】：温馨小贴士
+st.sidebar.info("💡 **小贴士**：如果生成效果不满意，请调节下方的 AI 抠图模型或画质优化参数哦！")
 
 use_ai = st.sidebar.toggle("开启 AI 智能抠图", value=True)
 
 model_choice = st.sidebar.selectbox(
     "选择 AI 抠图模型",
     [
-        "静物与通用主体 (isnet-general) - 推荐",
+        "静物与通用主体 (isnet-general) - 推荐", 
         "通用快速模型 (u2net)",
-        "动漫插画专属 (isnet-anime)",
+        "动漫插画专属 (isnet-anime)", 
         "真实人物全身 (u2net_human_seg)"
     ],
     index=0
 )
+# 【修复】：模型名称补充上了 "-use"
 model_dict = {
     "通用快速模型 (u2net)": "u2net",
-    "静物与通用主体 (isnet-general) - 推荐": "isnet-general",
+    "静物与通用主体 (isnet-general) - 推荐": "isnet-general-use",
     "动漫插画专属 (isnet-anime)": "isnet-anime",
     "真实人物全身 (u2net_human_seg)": "u2net_human_seg"
 }
 
 alpha_thresh = st.sidebar.slider(
-    "抠图边缘保留度",
+    "抠图边缘保留度", 
     min_value=10, max_value=200, value=60, step=10,
     help="数值越小，保留的边缘细节（如毛发、半透明部分）越多。"
 )
@@ -214,7 +217,8 @@ if uploaded_file is not None:
     st.subheader("原图预览")
     st.image(image, width=300)
 
-    if st.button("生成拼豆图纸", type="primary"):
+    # 【修改】：专属按钮文案
+    if st.button("为wyw生成拼豆图纸", type="primary"):
         st.info("💡 提示：正在处理图片，首次加载新 AI 模型可能需要几十秒，请稍候...")
         with st.spinner("正在生成中..."):
 
@@ -233,7 +237,8 @@ if uploaded_file is not None:
 
             st.subheader("拼豆消耗清单")
             if not bead_counts:
-                st.warning("⚠️ 未识别到图片主体，请尝试更换 AI 抠图模型，或关闭 AI 抠图功能。")
+                # 【修改】：超级明显的红色报错框
+                st.error("🚨 **警告：完全没有识别到图片主体！** \n\nAI 可能把整张图片都当成背景误删了。\n\n👉 **解决办法**：请在左侧尝试**更换其他的 AI 抠图模型**，或者直接**关闭 AI 智能抠图**开关，然后重新生成！", icon="🚨")
             else:
                 cols = st.columns(4)
                 col_index = 0
