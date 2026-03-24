@@ -1,11 +1,11 @@
 import streamlit as st
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageEnhance
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 from rembg import remove, new_session
 
-# ================= 1. 完整官方色板 =================
+# ================= 1. 官方色板 =================
 PERLER_COLORS = {
     "W1": {"name": "白色", "rgb": (255, 255, 255)},
     "G1": {"name": "浅灰", "rgb": (185, 188, 190)},
@@ -42,40 +42,58 @@ PERLER_COLORS = {
 }
 
 # ================= 2. 核心图像处理函数 =================
-def rgb_to_lab(rgb_color):
-    pixel = np.uint8([[rgb_color]])
-    lab_pixel = cv2.cvtColor(pixel, cv2.COLOR_RGB2LAB)
-    return lab_pixel[0][0]
-
-def get_closest_colors_lab(image_array, alpha_array, palette, alpha_threshold):
+def apply_palette_and_dither(img_small, alpha_array, palette, use_dither, alpha_threshold):
+    """使用最有效的调色板量化与抖动算法"""
     keys = list(palette.keys())
-    palette_lab = np.array([rgb_to_lab(palette[k]["rgb"]) for k in keys], dtype=np.float32)
+    
+    # 按照 Pillow 的要求展平色板
+    flat_palette = []
+    for k in keys:
+        flat_palette.extend(palette[k]["rgb"])
+    # 填充到 256 色（768个数值），Pillow 引擎的硬性要求
+    flat_palette.extend([0] * (768 - len(flat_palette)))
 
-    h, w, c = image_array.shape
-    pixels = image_array.reshape(-1, 3)
-    alphas = alpha_array.reshape(-1)
+    # 创建一个标准色板图像
+    pal_img = Image.new("P", (1, 1))
+    pal_img.putpalette(flat_palette)
 
-    mapped_pixels = np.zeros_like(pixels)
-    code_matrix = np.empty(len(pixels), dtype=object)
+    # 强制转换原图为 RGB 并进行调色板量化匹配
+    img_rgb = img_small.convert("RGB")
+    dither_mode = Image.FLOYDSTEINBERG if use_dither else Image.NONE
+    
+    # 核心魔法：使用引擎极速匹配最近颜色，并自动进行视觉抖动
+    img_quant = img_rgb.quantize(palette=pal_img, dither=dither_mode)
+    quant_array = np.array(img_quant)
+    
+    h, w = quant_array.shape
+    mapped_pixels = np.zeros((h, w, 3), dtype=np.uint8)
+    code_matrix = np.empty((h, w), dtype=object)
+    
+    for y in range(h):
+        for x in range(w):
+            # 处理透明背景
+            if alpha_array[y, x] < alpha_threshold:
+                mapped_pixels[y, x] = [255, 255, 255]
+                code_matrix[y, x] = None
+            else:
+                idx = quant_array[y, x]
+                # 防止索引越界（极小概率）
+                if idx < len(keys):
+                    code = keys[idx]
+                    mapped_pixels[y, x] = palette[code]["rgb"]
+                    code_matrix[y, x] = code
+                else:
+                    mapped_pixels[y, x] = [255, 255, 255]
+                    code_matrix[y, x] = None
+                
+    return mapped_pixels, code_matrix
 
-    img_lab = cv2.cvtColor(image_array.astype(np.uint8), cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
-
-    for i, pixel_lab in enumerate(img_lab):
-        if alphas[i] < alpha_threshold:
-            mapped_pixels[i] = [255, 255, 255]
-            code_matrix[i] = None
-            continue
-
-        distances = np.sum((palette_lab - pixel_lab) ** 2, axis=1)
-        closest_index = np.argmin(distances)
-
-        mapped_pixels[i] = palette[keys[closest_index]]["rgb"]
-        code_matrix[i] = keys[closest_index]
-
-    return mapped_pixels.reshape(h, w, 3), code_matrix.reshape(h, w)
-
-def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name, use_clahe, alpha_threshold):
+def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name, use_clahe, alpha_threshold, brightness, use_dither):
     """图纸生成逻辑"""
+    # 0. 【新核心】色彩与曝光校正
+    enhancer = ImageEnhance.Brightness(image)
+    image = enhancer.enhance(brightness)
+
     # 1. AI 抠图
     if use_ai_bg_removal:
         session = new_session(ai_model_name)
@@ -132,11 +150,10 @@ def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name,
         new_w = max(1, int(max_size * (orig_w / orig_h)))
 
     img_small = processed_pil.resize((new_w, new_h), Image.Resampling.BOX)
-    img_array = np.array(img_small)[:, :, :3]
-    alpha_array = np.array(img_small)[:, :, 3]
+    alpha_array = np.array(img_small.split()[-1]) if img_small.mode == "RGBA" else np.ones((new_h, new_w)) * 255
 
-    # 7. 颜色匹配
-    mapped_array, code_matrix = get_closest_colors_lab(img_array, alpha_array, palette, alpha_threshold)
+    # 7. 颜色匹配与抖动处理
+    mapped_array, code_matrix = apply_palette_and_dither(img_small, alpha_array, palette, use_dither, alpha_threshold)
 
     # 8. 绘制图纸
     h, w, _ = mapped_array.shape
@@ -178,10 +195,13 @@ st.sidebar.header("参数设置")
 grid_size = st.sidebar.slider("图纸精细度 (最长边豆子数)", min_value=15, max_value=120, value=50, step=5)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("AI 抠图与画质优化")
-# 【新增】：温馨小贴士
-st.sidebar.info("💡 **小贴士**：如果生成效果不满意，请调节下方的 AI 抠图模型或画质优化参数哦！")
+st.sidebar.subheader("色彩校正 (解决颜色不准)")
+st.sidebar.info("💡 **小贴士**：如果白色物体生成出来发黄、发灰或变成了棕色，请调高曝光亮度！")
+brightness_val = st.sidebar.slider("曝光亮度补偿", min_value=0.5, max_value=2.0, value=1.0, step=0.1, help="1.0为原图。调高可消除阴影，让物体更白亮。")
+use_dither = st.sidebar.toggle("开启像素抖动 (解决色彩断层)", value=True, help="当颜色缺失时，用两种相近颜色的豆子交替排列来欺骗视觉，效果更逼真！")
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("AI 抠图与画质优化")
 use_ai = st.sidebar.toggle("开启 AI 智能抠图", value=True)
 
 model_choice = st.sidebar.selectbox(
@@ -194,7 +214,6 @@ model_choice = st.sidebar.selectbox(
     ],
     index=0
 )
-# 【修复】：模型名称补充上了 "-use"
 model_dict = {
     "通用快速模型 (u2net)": "u2net",
     "静物与通用主体 (isnet-general) - 推荐": "isnet-general-use",
@@ -207,7 +226,6 @@ alpha_thresh = st.sidebar.slider(
     min_value=10, max_value=200, value=60, step=10,
     help="数值越小，保留的边缘细节（如毛发、半透明部分）越多。"
 )
-
 use_clahe = st.sidebar.toggle("开启细节对比度强化", value=True, help="可增强相近颜色（如纯白物体）的立体感与轮廓。")
 
 uploaded_file = st.file_uploader("请上传图片", type=["jpg", "jpeg", "png"])
@@ -217,7 +235,6 @@ if uploaded_file is not None:
     st.subheader("原图预览")
     st.image(image, width=300)
 
-    # 【修改】：专属按钮文案
     if st.button("为wyw生成拼豆图纸", type="primary"):
         st.info("💡 提示：正在处理图片，首次加载新 AI 模型可能需要几十秒，请稍候...")
         with st.spinner("正在生成中..."):
@@ -229,7 +246,9 @@ if uploaded_file is not None:
                 use_ai,
                 model_dict[model_choice],
                 use_clahe,
-                alpha_thresh
+                alpha_thresh,
+                brightness_val,
+                use_dither
             )
 
             st.subheader("施工图纸")
@@ -237,7 +256,6 @@ if uploaded_file is not None:
 
             st.subheader("拼豆消耗清单")
             if not bead_counts:
-                # 【修改】：超级明显的红色报错框
                 st.error("🚨 **警告：完全没有识别到图片主体！** \n\nAI 可能把整张图片都当成背景误删了。\n\n👉 **解决办法**：请在左侧尝试**更换其他的 AI 抠图模型**，或者直接**关闭 AI 智能抠图**开关，然后重新生成！", icon="🚨")
             else:
                 cols = st.columns(4)
