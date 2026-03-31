@@ -45,7 +45,7 @@ PERLER_COLORS = {
 def apply_palette_and_dither(img_small, alpha_array, palette, use_dither, alpha_threshold):
     """使用最有效的调色板量化与抖动算法"""
     keys = list(palette.keys())
-    
+
     # 按照 Pillow 的要求展平色板
     flat_palette = []
     for k in keys:
@@ -60,15 +60,15 @@ def apply_palette_and_dither(img_small, alpha_array, palette, use_dither, alpha_
     # 强制转换原图为 RGB 并进行调色板量化匹配
     img_rgb = img_small.convert("RGB")
     dither_mode = Image.FLOYDSTEINBERG if use_dither else Image.NONE
-    
+
     # 核心魔法：使用引擎极速匹配最近颜色，并自动进行视觉抖动
     img_quant = img_rgb.quantize(palette=pal_img, dither=dither_mode)
     quant_array = np.array(img_quant)
-    
+
     h, w = quant_array.shape
     mapped_pixels = np.zeros((h, w, 3), dtype=np.uint8)
     code_matrix = np.empty((h, w), dtype=object)
-    
+
     for y in range(h):
         for x in range(w):
             # 处理透明背景
@@ -85,10 +85,12 @@ def apply_palette_and_dither(img_small, alpha_array, palette, use_dither, alpha_
                 else:
                     mapped_pixels[y, x] = [255, 255, 255]
                     code_matrix[y, x] = None
-                
+
     return mapped_pixels, code_matrix
 
-def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name, use_clahe, alpha_threshold, brightness, use_dither):
+
+def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name, use_clahe, alpha_threshold, brightness,
+                     use_dither):
     """图纸生成逻辑"""
     # 0. 【新核心】色彩与曝光校正
     enhancer = ImageEnhance.Brightness(image)
@@ -157,20 +159,30 @@ def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name,
 
     # 8. 绘制图纸
     h, w, _ = mapped_array.shape
+    # 稍微调整画布比例，让格子更清晰
     fig, ax = plt.subplots(figsize=(w * 0.4, h * 0.4), dpi=150)
     ax.imshow(mapped_array)
 
+    # 设置四周的坐标数字
     ax.set_xticks(np.arange(w))
-    ax.set_xticklabels(np.arange(1, w + 1), fontsize=10)
+    ax.set_xticklabels(np.arange(1, w + 1), fontsize=8, color="#555555")
     ax.set_yticks(np.arange(h))
-    ax.set_yticklabels(np.arange(1, h + 1), fontsize=10)
+    ax.set_yticklabels(np.arange(1, h + 1), fontsize=8, color="#555555")
     ax.tick_params(top=True, labeltop=True, bottom=True, labelbottom=True, left=True, labelleft=True, right=True, labelright=True)
 
+    # 设置小网格（每个豆子的浅灰色边框）
     ax.set_xticks(np.arange(-.5, w, 1), minor=True)
     ax.set_yticks(np.arange(-.5, h, 1), minor=True)
-    ax.grid(which="minor", color="gray", linestyle='-', linewidth=0.5, alpha=0.5)
+    ax.grid(which="minor", color="#cccccc", linestyle='-', linewidth=0.8)
     ax.grid(which="major", visible=False)
 
+    # 【新增】绘制 10x10 的红色加粗辅助线
+    for i in range(10, w, 10):
+        ax.axvline(x=i - 0.5, color='#d93838', linewidth=1.5, alpha=0.9)
+    for i in range(10, h, 10):
+        ax.axhline(y=i - 0.5, color='#d93838', linewidth=1.5, alpha=0.9)
+
+    # 填写色号文本并统计数量
     bead_counts = {}
     for y in range(h):
         for x in range(w):
@@ -178,13 +190,16 @@ def create_blueprint(image, max_size, palette, use_ai_bg_removal, ai_model_name,
             if code is not None:
                 bead_counts[code] = bead_counts.get(code, 0) + 1
                 rgb = palette[code]["rgb"]
+                # 计算亮度，决定文字是黑色还是白色
                 luminance = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
                 text_color = "white" if luminance < 130 else "black"
-                font_s = 8 if max_size <= 40 else 5
+                # 根据图纸大小自适应字体
+                font_s = 9 if max_size <= 40 else (6 if max_size <= 80 else 4)
                 ax.text(x, y, code, ha='center', va='center', color=text_color, fontsize=font_s, fontweight='bold')
 
     plt.tight_layout()
     return fig, bead_counts
+
 
 # ================= 3. 网页界面设计 =================
 st.set_page_config(page_title="wyw专属拼豆图纸生成器", page_icon="🎨", layout="wide")
@@ -197,8 +212,10 @@ grid_size = st.sidebar.slider("图纸精细度 (最长边豆子数)", min_value=
 st.sidebar.markdown("---")
 st.sidebar.subheader("色彩校正 (解决颜色不准)")
 st.sidebar.info("💡 **小贴士**：如果白色物体生成出来发黄、发灰或变成了棕色，请调高曝光亮度！")
-brightness_val = st.sidebar.slider("曝光亮度补偿", min_value=0.5, max_value=2.0, value=1.0, step=0.1, help="1.0为原图。调高可消除阴影，让物体更白亮。")
-use_dither = st.sidebar.toggle("开启像素抖动 (解决色彩断层)", value=True, help="当颜色缺失时，用两种相近颜色的豆子交替排列来欺骗视觉，效果更逼真！")
+brightness_val = st.sidebar.slider("曝光亮度补偿", min_value=0.5, max_value=2.0, value=1.0, step=0.1,
+                                   help="1.0为原图。调高可消除阴影，让物体更白亮。")
+use_dither = st.sidebar.toggle("开启像素抖动 (解决色彩断层)", value=True,
+                               help="当颜色缺失时，用两种相近颜色的豆子交替排列来欺骗视觉，效果更逼真！")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("AI 抠图与画质优化")
@@ -207,9 +224,9 @@ use_ai = st.sidebar.toggle("开启 AI 智能抠图", value=True)
 model_choice = st.sidebar.selectbox(
     "选择 AI 抠图模型",
     [
-        "静物与通用主体 (isnet-general) - 推荐", 
+        "静物与通用主体 (isnet-general) - 推荐",
         "通用快速模型 (u2net)",
-        "动漫插画专属 (isnet-anime)", 
+        "动漫插画专属 (isnet-anime)",
         "真实人物全身 (u2net_human_seg)"
     ],
     index=0
@@ -222,7 +239,7 @@ model_dict = {
 }
 
 alpha_thresh = st.sidebar.slider(
-    "抠图边缘保留度", 
+    "抠图边缘保留度",
     min_value=10, max_value=200, value=60, step=10,
     help="数值越小，保留的边缘细节（如毛发、半透明部分）越多。"
 )
@@ -256,16 +273,35 @@ if uploaded_file is not None:
 
             st.subheader("拼豆消耗清单")
             if not bead_counts:
-                st.error("🚨 **警告：完全没有识别到图片主体！** \n\nAI 可能把整张图片都当成背景误删了。\n\n👉 **解决办法**：请在左侧尝试**更换其他的 AI 抠图模型**，或者直接**关闭 AI 智能抠图**开关，然后重新生成！", icon="🚨")
+                st.error(
+                    "🚨 **警告：完全没有识别到图片主体！** \n\nAI 可能把整张图片都当成背景误删了。\n\n👉 **解决办法**：请在左侧尝试**更换其他的 AI 抠图模型**，或者直接**关闭 AI 智能抠图**开关，然后重新生成！",
+                    icon="🚨")
             else:
-                cols = st.columns(4)
-                col_index = 0
+                # 【修改】使用 HTML+CSS 完美复现参考图中的紧凑色块清单
+                html_legend = "<div style='display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;'>"
                 sorted_counts = sorted(bead_counts.items(), key=lambda x: x[1], reverse=True)
+                
                 for code, count in sorted_counts:
                     color_info = PERLER_COLORS[code]
                     rgb = color_info["rgb"]
-                    color_box = f"<div style='display:inline-block; width:20px; height:20px; background-color:rgb({rgb[0]},{rgb[1]},{rgb[2]}); border:1px solid #000; margin-right:8px; vertical-align:middle;'></div>"
-                    with cols[col_index % 4]:
-                        st.markdown(f"{color_box} **{code}** ({color_info['name']}): **{count}** 颗",
-                                    unsafe_allow_html=True)
-                    col_index += 1
+                    
+                    # 再次计算亮度，确保色卡上的字也能看清
+                    luminance = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+                    text_color = "white" if luminance < 130 else "black"
+                    
+                    # 拼装单个色块组件的 HTML
+                    html_legend += f"""
+                    <div style="display: flex; border: 1px solid #aaa; border-radius: 4px; overflow: hidden; font-family: sans-serif; font-size: 14px; box-shadow: 1px 1px 3px rgba(0,0,0,0.1);">
+                        <div style="background-color: rgb({rgb[0]},{rgb[1]},{rgb[2]}); color: {text_color}; padding: 4px 8px; font-weight: bold; border-right: 1px solid #aaa; display: flex; align-items: center; justify-content: center; min-width: 45px;">
+                            {code}
+                        </div>
+                        <div style="padding: 4px 10px; background-color: #ffffff; color: #333; display: flex; align-items: center; justify-content: center;">
+                            {count}
+                        </div>
+                    </div>
+                    """
+                
+                html_legend += "</div>"
+                
+                # 在 Streamlit 中渲染这段 HTML
+                st.markdown(html_legend, unsafe_allow_html=True)
